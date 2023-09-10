@@ -1,4 +1,4 @@
-# 请在git上查阅最早的版本2023_9_11_change_1，在mydetect中会保存selected_track
+# 请在git上查阅SHA为f31f528e714a62b2704a4f642d7a2c030cb2db6b的commit，在mydetect中会保存selected_track
 # 保存selected_track
 
 
