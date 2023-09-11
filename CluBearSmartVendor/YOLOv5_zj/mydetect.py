@@ -94,8 +94,9 @@ def parse_opt():
     parser.add_argument('--proximity_thresh', type=float, default=0.5, help='threshold for rejecting low overlap reid matches')
     parser.add_argument('--appearance_thresh', type=float, default=0.25, help='threshold for rejecting low appearance similarity reid matches')
     
+    # --------------------------是否清理runs/detect/exp中的所有文件-------------------------------------
+    parser.add_argument('--del_file', action="store_true", help='remove all files in runs/detect/exp at begining')
     
-
     return parser
 
 
@@ -127,9 +128,11 @@ def run_by_video(model,opt):
     # Directories
     save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=True)  # increment run
     (save_dir / 'labels' if opt.save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
-    
-    del_file(str(save_dir))
 
+    # ------delete all files in detect/exp--------------------------------------------------
+    if opt.del_file:
+        del_file(str(save_dir))
+    # ---------------------------------------------------------------------------------------
     # Dataloader
     bs = 1  # batch_size
     if webcam:
@@ -292,9 +295,7 @@ def run_by_video(model,opt):
                     results_list.append([getattr(dataset, 'frame', 0) - 1, tid, tlwh[0], tlwh[1], tlwh[2], tlwh[3], t.score])
     #===========================save botsort results=====================================
     if opt.save_txt:
-        os.makedirs(f'{tmpdir}/track', exist_ok=True)
-        # res_file = osp.join(save_folder, f"{p.stem}.txt")
-        res_file = osp.join(f'{tmpdir}/track', f"{p.stem}.txt")
+        res_file = osp.join(save_folder, f"{p.stem}.txt")
         with open(res_file, 'w') as f:
             f.writelines(results)
         logger.info(f"save results to {res_file}")
@@ -328,9 +329,9 @@ def run_by_video(model,opt):
             obj_cnt[tid] = y2 - y1
     ###################处理track################################
 
-    os.makedirs(f'{tmpdir}/selected_track', exist_ok=True)
-    with open(f'{tmpdir}/selected_track/{p.stem}.json','w') as f:
-        f.write(json.dumps(obj_cnt))
+    #os.makedirs(f'{tmpdir}/selected_track', exist_ok=True)
+    #with open(f'{tmpdir}/selected_track/{p.stem}.json','w') as f:
+    #    f.write(json.dumps(obj_cnt))
     ############################################################    
     if len(obj_cnt) == 1 and list(obj_cnt.values())[0] > 0:
         is_easycase = True

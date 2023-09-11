@@ -81,7 +81,7 @@ class integrated_classifier(object):
         os.mkdir(_dir)
         
     def fresh(self):
-        '''清空中间文件'''
+        '''删除所有中间文件夹'''
         
         FILE = Path(__file__).resolve()
         yolo5_zj_path = str(FILE.parents[0]) + '/YOLOv5_zj'  
@@ -107,61 +107,73 @@ def set_global_python_path(new_python_path):
     worker.set_python_path(python_path)
     mydetector.python_path = python_path
 
-def extract(video_path, is_prob=False,clear_result=True):
+def extract(video_path, is_prob=False,clear_result=True,multiple_images=False):
     global worker
     global mydetector
     
     if not isinstance(video_path,str): print('CSV: The pathfile must be a str.'); return
     if not os.path.exists(video_path): print('CSV: This file does not exist!'); return
     if not os.path.isfile(video_path): print('CSV: This is not a file!'); return    
+
     
-
-    '''1.从视频提取图片'''
-
-    try:
-        easycase_res = mydetector.detect(video_path)
-    except:
-        print("================An exception occurred!================")
-        print("================An exception occurred!================")
-        print("================An exception occurred!================")
-        print("================An exception occurred!================")
-        print("================An exception occurred!================")
-        print("================An exception occurred!================")
-    
-    if easycase_res == None:
-        # 未获取 easy_case
-
-        detect_res = ['否', '/', '/', '/', '/', '/', '/', '/', '/', '/']
-        
-        prob = [1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-                
-        # 清理存储的最大物框图片
-        clear_result and worker.fresh()
-        if is_prob:
-            return [detect_res, prob, None]
-        else:
-            return [detect_res, None]
-
+    if multiple_images:
+        try:
+            easycase_res = mydetector.multiple_detect(video_path)
+        except:
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
     else:
-            
-        [out_img_path, output_img_dir, max_image] = easycase_res
-        '''2.提取图片特征'''
-        if is_prob:
-            worker.prob_return = True
-            detect_res, prob = worker.detect(out_img_path)
-        else:
-            worker.prob_return = False
-            detect_res = worker.detect(out_img_path)
+        '''1.从视频提取图片'''
 
-        # 清理存储的最大物框图片
-        if clear_result:
-            shutil.rmtree(output_img_dir)
-            worker.fresh()
- 
-        if is_prob:
-            return [['是'] + detect_res, [1.0] + prob, max_image]
+        try:
+            easycase_res = mydetector.detect(video_path)
+        except:
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+            print("================An exception occurred!================")
+
+        if easycase_res == None:
+            # 未获取 easy_case
+
+            detect_res = ['否', '/', '/', '/', '/', '/', '/', '/', '/', '/']
+
+            prob = [1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+            # 清理存储的最大物框图片
+            if clear_result:
+                worker.fresh()
+            if is_prob:
+                return [detect_res, prob, None]
+            else:
+                return [detect_res, None]
+
         else:
-            return [['是'] + detect_res, max_image]
+
+            [out_img_path, output_img_dir, max_image] = easycase_res
+            '''2.提取图片特征'''
+            if is_prob:
+                worker.prob_return = True
+                detect_res, prob = worker.detect(out_img_path)
+            else:
+                worker.prob_return = False
+                detect_res = worker.detect(out_img_path)
+
+            # 清理存储的最大物框图片
+            if clear_result:
+                shutil.rmtree(output_img_dir)
+                worker.fresh()
+
+            if is_prob:
+                return [['是'] + detect_res, [1.0] + prob, max_image]
+            else:
+                return [['是'] + detect_res, max_image]
        
         
     
