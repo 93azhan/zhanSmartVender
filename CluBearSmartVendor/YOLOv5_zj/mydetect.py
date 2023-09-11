@@ -97,6 +97,9 @@ def parse_opt():
     # --------------------------是否清理runs/detect/exp中的所有文件-------------------------------------
     parser.add_argument('--del_file', action="store_true", help='remove all files in runs/detect/exp at begining')
     
+    # --------------------------是否使用zhan的方法------------------------------------------------------------------------
+    parser.add_argument('--zhan', action="store_true", help='total price determined by times of crossing vender door')
+    
     return parser
 
 
@@ -387,6 +390,9 @@ def run(opt,**kwargs):
     
     # ===============================================================================================================
     
+
+    
+    
     is_dir = os.path.isdir(opt.source)
     if is_dir:
         files_last = []
@@ -400,12 +406,317 @@ def run(opt,**kwargs):
                     opt1 = copy.deepcopy(opt)
                     opt1.source = opt.source + '/' + file
                     print(opt1.source)
-                    run_by_video(model, opt1)
+                    
+                    #----------是否用zhan的方法-----------------------
+                    if opt1.zhan:
+                        run_by_video_zhan(model, opt1)
+                    else:
+                        run_by_video(model, opt1)
             files = os.listdir(opt.source) #检查源文件夹是否有更新
             files_diff = list(set(files) - set(files_last))
     else:
-        run_by_video(model,opt)
+        #----------是否用zhan的方法-----------------------
+        if opt.zhan:
+            run_by_video_zhan(model, opt)
+        else:
+            run_by_video(model, opt)
+            
+#==================zhan's method=======================================            
+@smart_inference_mode()
 
+def run_by_video_zhan(model,opt): 
+    tmpdir = str(opt.tmpdir) # 中间文件存放位置
+    
+    stride, names, pt = model.stride, model.names, model.pt
+    opt.imgsz = check_img_size(opt.imgsz, s=stride)  # check image size
+    opt.source = str(opt.source)
+    save_img = opt.save and not opt.source.endswith('.txt')  # save inference images
+    is_file = Path(opt.source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
+    is_url = opt.source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
+    webcam = opt.source.isnumeric() or opt.source.endswith('.txt') or (is_url and not is_file)
+    screenshot = opt.source.lower().startswith('screen')
+    if is_url and is_file:
+        opt.source = check_file(opt.source)  # download
+
+    # Directories
+    save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=True)  # increment run
+    (save_dir / 'labels' if opt.save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+
+    # ------delete all files in detect/exp--------------------------------------------------
+    if opt.del_file:
+        del_file(str(save_dir))
+    # ---------------------------------------------------------------------------------------
+    # Dataloader
+    bs = 1  # batch_size
+    if webcam:
+        opt.view_img = check_imshow()
+        dataset = LoadStreams(opt.source, img_size=opt.imgsz, stride=stride, auto=pt, vid_stride=opt.vid_stride)
+        bs = len(dataset)
+    elif screenshot:
+        dataset = LoadScreenshots(opt.source, img_size=opt.imgsz, stride=stride, auto=pt)
+    else:
+        dataset = LoadImages(opt.source, img_size=opt.imgsz, stride=stride, auto=pt, vid_stride=opt.vid_stride)
+    vid_path, vid_writer = [None] * bs, [None] * bs
+    
+    cap = cv2.VideoCapture(opt.source)
+    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    save_folder = osp.join(save_dir, 'track')
+    os.makedirs(save_folder, exist_ok=True)
+    
+    logger.info("-----------------------BOTSORT Started----------------------------")
+    tracker = BoTSORT(opt)
+    frame_id = 0
+    results = []
+    results_list = []
+    
+    # Run inference
+    model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *opt.imgsz))  # warmup
+    seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    for path, im, im0s, vid_cap, s in dataset:
+        with dt[0]:
+            im = torch.from_numpy(im).to(model.device)
+            im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
+            im /= 255  # 0 - 255 to 0.0 - 1.0
+            if len(im.shape) == 3:
+                im = im[None]  # expand for batch dim
+
+        # Inference
+        with dt[1]:
+            opt.visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if opt.visualize else False
+            pred = model(im, augment=opt.augment, visualize=opt.visualize)
+
+        # NMS
+        with dt[2]:
+            pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
+
+        # Second-stage classifier (optional)
+        # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
+
+        # Process predictions
+        for i, det in enumerate(pred):  # per image
+            seen += 1
+            
+            p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+
+            p = Path(p)  # to Path
+            save_path = str(save_dir / p.name)  # im.jpg
+            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
+            s += '%gx%g ' % im.shape[2:]  # print string
+            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            imc = im0.copy() if opt.save_crop else im0  # for save_crop
+            annotator = Annotator(im0, line_width=opt.line_thickness, example=str(names))
+            if len(det):
+                # Rescale boxes from img_size to im0 size
+                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
+
+                # Print results
+                for c in det[:, 5].unique():
+                    n = (det[:, 5] == c).sum()  # detections per class
+                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+                # Write results
+                for *xyxy, conf, cls in reversed(det):
+                    if opt.save_txt:  # Write to file
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
+                        with open(f'{txt_path}.txt', 'a') as f:
+                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+
+                    if save_img or opt.save_crop or opt.view_img:  # Add bbox to image
+                        c = int(cls)  # integer class
+                        label = None if opt.hide_labels else (names[c] if opt.hide_conf else f'{names[c]} {conf:.2f}')
+                        annotator.box_label(xyxy, label, color=colors(c, True))
+                    if opt.save_crop:
+                        save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+
+            # Stream results
+            im0 = annotator.result()
+            if opt.view_img:
+                if platform.system() == 'Linux' and p not in windows:
+                    windows.append(p)
+                    cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
+                    cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
+                cv2.imshow(str(p), im0)
+                cv2.waitKey(1)  # 1 millisecond
+
+            # Save results (image with detections)
+            if save_img:
+                if dataset.mode == 'image':
+                    cv2.imwrite(save_path, im0)
+                else:  # 'video' or 'stream'
+                    if vid_path[i] != save_path:  # new video
+                        vid_path[i] = save_path
+                        if isinstance(vid_writer[i], cv2.VideoWriter):
+                            vid_writer[i].release()  # release previous video writer
+                        if vid_cap:  # video
+                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        else:  # stream
+                            fps, w, h = 30, im0.shape[1], im0.shape[0]
+                        save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
+                        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                    vid_writer[i].write(im0)
+
+        # Print time (inference-only)
+        #LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
+        
+        
+        
+        #botsort
+        frame = im0s.copy()
+        
+        bboxes = []
+        for *xyxy, conf, cls in reversed(det):
+            xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+            line = [cls, *xywh, conf]
+            bboxes.append(line)
+        
+        
+        bbox_xywh = []
+        for cls_id, x, y, w, h, conf in bboxes:
+            obj = [
+                int(max((x - w / 2) * width, 0)), int(max((y - h / 2) * height, 0)),
+                int(min((x + w / 2) * width, width - 1)), int(min((y + h / 2) * height, height - 1)),
+                conf.cpu(), 0
+            ]
+            bbox_xywh.append(obj)
+
+        if bbox_xywh is not None:
+            detections = np.array(bbox_xywh)
+
+            # Run tracker
+            online_targets = tracker.update(detections, frame)
+
+            online_tlwhs = []
+            online_ids = []
+            online_scores = []
+   #-----------------------ALL TARGETS CAPTURED-----------------------------------------------
+            for t in online_targets:
+                tlwh = t.tlwh
+                tid = t.track_id
+                vertical = tlwh[2] / tlwh[3] > opt.aspect_ratio_thresh
+                if tlwh[2] * tlwh[3] > opt.min_box_area and not vertical:
+                    online_tlwhs.append(tlwh)
+                    online_ids.append(tid)
+                    online_scores.append(t.score)
+   #----------------------------------------UPDATE TRACK--------------------------------------
+                    results.append(
+                        f"{getattr(dataset, 'frame', 0) - 1},{tid},{tlwh[0]:.2f},{tlwh[1]:.2f},{tlwh[2]:.2f},{tlwh[3]:.2f},{t.score:.2f}\n"
+                    )
+                    results_list.append([getattr(dataset, 'frame', 0) - 1, tid, tlwh[0], tlwh[1], tlwh[2], tlwh[3], t.score])
+    #===========================save botsort results=====================================
+    if opt.save_txt:
+        res_file = osp.join(save_folder, f"{p.stem}.txt")
+        with open(res_file, 'w') as f:
+            f.writelines(results)
+        logger.info(f"save results to {res_file}")
+    #==============================================================================================================
+    # Print results
+    t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
+    LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *opt.imgsz)}' % t)
+    if opt.save_txt or save_img:
+        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if opt.save_txt else ''
+        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
+    if opt.update:
+        strip_optimizer(opt.weights[0])  # opt.update model (to fix SourceChangeWarning)
+    
+    
+    logger.info("-----------------------BOTSORT Finished----------------------------")
+    
+    
+    if not results_list:
+        return "Nothing detected"
+    
+    #======门线范围，上下界如下，合理范围应包含在其中(左上角为（0,0）)=======
+    #-----------------126---------------------------
+    #                 door
+    # ----------------265---------------------------
+    upper_door = 240
+    lower_door = 140
+    #======================================
+    
+    df = pd.DataFrame(results_list)
+    tids = set(df[1])
+    df.columns = ['frame', 'tid','center_x','center_y','width','height','score']
+    categories = len(tids)
+
+    for tid in tids:
+        
+        this_tid = df[df['tid'] == tid]
+        LOGGER.info(this_tid)
+#         first_frame = df[df[1] == tid].iloc[0, :][2:6].tolist()
+#         last_frame = df[df[1] == tid].iloc[-1, :][2:6].tolist()
+#         y1 = first_frame[1] + first_frame[3] / 2
+#         y2 = last_frame[1] + last_frame[3] / 2
+    
+
+#     #easy case
+#     if not results_list:
+#         return "Nothing detected"
+#     df = pd.DataFrame(results_list)
+#     tids = set(df[1])
+#     obj_cnt = {}
+#     is_easycase = False
+#     for tid in tids:
+#     # --------------center_x,center_y,width.length----------------------------------
+#         first_frame = df[df[1] == tid].iloc[0, :][2:6].tolist()
+#         last_frame = df[df[1] == tid].iloc[-1, :][2:6].tolist()
+#         y1 = first_frame[1] + first_frame[3] / 2
+#         y2 = last_frame[1] + last_frame[3] / 2
+#     # ----------------第一帧和最后一帧max_y的差大于五分之一个height且唯一--------------------
+#         if abs(y2 - y1) >= 0.2 * height:
+#             obj_cnt[tid] = y2 - y1
+#     ###################处理track################################
+
+#     #os.makedirs(f'{tmpdir}/selected_track', exist_ok=True)
+#     #with open(f'{tmpdir}/selected_track/{p.stem}.json','w') as f:
+#     #    f.write(json.dumps(obj_cnt))
+#     ############################################################    
+#     if len(obj_cnt) == 1 and list(obj_cnt.values())[0] > 0:
+#         is_easycase = True
+#         tid = list(obj_cnt.keys())[0]
+#     #------------------------------------------------------------------------------------------
+#     if is_easycase:
+#         os.makedirs(f'{tmpdir}/image_results', exist_ok=1)
+#         cap = cv2.VideoCapture(opt.source)
+#         num_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+#         W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+#         boxes = df[df[1] == tid].values.tolist()
+#         image_boxes = [boxes[np.linspace(0, len(boxes) - 1, 5, dtype=int)[i]] for i in range(5)]
+#         max_l = 0
+#         for i in range(0, num_frame):
+#             _, frame = cap.read()
+#             print(image_boxes)
+#         #---------------在所有识别出来帧中，选取包含最大的anchor的一帧，把anchor变成正方形------------------
+#             while image_boxes and i == int(image_boxes[0][0]):
+#                 x, y, w, h = image_boxes[0][2:6]
+#                 x0, y0 = int(x + w / 2), int(y + h / 2)
+#                 l = int(max(w, h)) + 50
+#                 x1, y1, x2, y2 = x0 - l // 2, y0 - l // 2, x0 + l // 2, y0 + l // 2
+#                 if x1 < 0:
+#                     x1, x2 = 0, x2 - x1
+#                 if y1 < 0:
+#                     y1, y2 = 0, y2 - y1
+#                 if x2 > W:
+#                     x1, x2 = x1 - (x2 - W), W
+#                 if y2 > H:
+#                     y1, y2 = y1 - (y2 - H), H
+#                 if l > max_l:
+#                     max_l = l
+#                     max_image = frame[y1:y2, x1:x2, :].copy()
+#                 image_boxes.pop(0)
+#         cv2.imwrite(f'{tmpdir}/image_results/{p.stem}.jpg', max_image)
+#         print(f'Results saved to {tmpdir}/image_results')
+#         return "Easy"
+#     else:
+#         return "Hard"
+#==================zhan's method ENDS=======================================    
+    
+    
+    
 
 if __name__ == "__main__":
 

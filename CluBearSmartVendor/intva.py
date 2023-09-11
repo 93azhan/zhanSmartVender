@@ -116,9 +116,10 @@ def extract(video_path, is_prob=False,clear_result=True,multiple_images=False):
     if not os.path.isfile(video_path): print('CSV: This is not a file!'); return    
 
     
+    #------------multiple_images对应识别所有track，得到图片，并根据track附上经过门线的“净”次数----------------------
     if multiple_images:
         try:
-            easycase_res = mydetector.multiple_detect(video_path)
+            result = mydetector.multiple_detect(video_path)
         except:
             print("================An exception occurred!================")
             print("================An exception occurred!================")
@@ -126,8 +127,52 @@ def extract(video_path, is_prob=False,clear_result=True,multiple_images=False):
             print("================An exception occurred!================")
             print("================An exception occurred!================")
             print("================An exception occurred!================")
+            
+            
+#         if easycase_res == None:
+#             # 未获取 easy_case
+
+#             detect_res = ['否', '/', '/', '/', '/', '/', '/', '/', '/', '/']
+
+#             prob = [1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+
+
+            # 清理存储的最大物框图片
+            if clear_result:
+                worker.fresh()
+            if is_prob:
+                return [detect_res, prob, None]
+            else:
+                return [detect_res, None]
+
+#         else:
+
+#             [out_img_path, output_img_dir, max_image] = easycase_res
+#             '''2.提取图片特征'''
+#             if is_prob:
+#                 worker.prob_return = True
+#                 detect_res, prob = worker.detect(out_img_path)
+#             else:
+#                 worker.prob_return = False
+#                 detect_res = worker.detect(out_img_path)
+
+#             # 清理存储的最大物框图片
+#             if clear_result:
+#                 shutil.rmtree(output_img_dir)
+#                 worker.fresh()
+
+#             if is_prob:
+#                 return [['是'] + detect_res, [1.0] + prob, max_image]
+#             else:
+#                 return [['是'] + detect_res, max_image]
+         
+        
+        
+        
+    # ------------------把easy、hard进行区分的方法-------------------------------   
     else:
-        '''1.从视频提取图片'''
+        #--------------------1.从视频提取图片----------------------
 
         try:
             easycase_res = mydetector.detect(video_path)
@@ -138,7 +183,7 @@ def extract(video_path, is_prob=False,clear_result=True,multiple_images=False):
             print("================An exception occurred!================")
             print("================An exception occurred!================")
             print("================An exception occurred!================")
-
+        
         if easycase_res == None:
             # 未获取 easy_case
 
