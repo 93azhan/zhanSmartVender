@@ -275,10 +275,11 @@ def run_by_video(model,opt):
 
         if bbox_xywh is not None:
             detections = np.array(bbox_xywh)
+            
 
             # Run tracker
             online_targets = tracker.update(detections, frame)
-
+            
             online_tlwhs = []
             online_ids = []
             online_scores = []
@@ -585,10 +586,16 @@ def run_by_video_zhan(model,opt):
 
         if bbox_xywh is not None:
             detections = np.array(bbox_xywh)
+            #￥￥￥￥￥￥￥￥￥￥每个detection是一行，逐帧循环￥￥￥￥￥￥￥￥￥￥￥
+            #with open("temp1.txt","a") as f:
+            #    if not len(detections):
+            #        f.write('$'+'\n')
+            #    for i in range(len(detections)):
+            #        f.write(str(detections[i])+'\n')
 
             # Run tracker
             online_targets = tracker.update(detections, frame)
-
+            
             online_tlwhs = []
             online_ids = []
             online_scores = []
@@ -629,12 +636,8 @@ def run_by_video_zhan(model,opt):
     if not results_list:
         return "Nothing detected"
     
-    #======门线范围，上下界如下，合理范围应包含在其中(左上角为（0,0）)=======
-    #-----------------126---------------------------
-    #                 door
-    # ----------------265---------------------------
-    upper_door = 240
-    lower_door = 140
+    #======门线位置=======
+    door = 390
     #======================================
     
     df = pd.DataFrame(results_list)
@@ -642,82 +645,72 @@ def run_by_video_zhan(model,opt):
     df.columns = ['frame', 'tid','center_x','center_y','width','height','score']
     categories = len(tids)
 
+    selected_tids = {}
+    
+    #>>>>>>>>>>>>>>>>>>>>>>>>>判断上边界是否越过门线，以及确定净越过次数<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     for tid in tids:
         
         this_tid = df[df['tid'] == tid]
-        LOGGER.info(this_tid)
-#         first_frame = df[df[1] == tid].iloc[0, :][2:6].tolist()
-#         last_frame = df[df[1] == tid].iloc[-1, :][2:6].tolist()
-#         y1 = first_frame[1] + first_frame[3] / 2
-#         y2 = last_frame[1] + last_frame[3] / 2
-    
-
-#     #easy case
-#     if not results_list:
-#         return "Nothing detected"
-#     df = pd.DataFrame(results_list)
-#     tids = set(df[1])
-#     obj_cnt = {}
-#     is_easycase = False
-#     for tid in tids:
-#     # --------------center_x,center_y,width.length----------------------------------
-#         first_frame = df[df[1] == tid].iloc[0, :][2:6].tolist()
-#         last_frame = df[df[1] == tid].iloc[-1, :][2:6].tolist()
-#         y1 = first_frame[1] + first_frame[3] / 2
-#         y2 = last_frame[1] + last_frame[3] / 2
-#     # ----------------第一帧和最后一帧max_y的差大于五分之一个height且唯一--------------------
-#         if abs(y2 - y1) >= 0.2 * height:
-#             obj_cnt[tid] = y2 - y1
-#     ###################处理track################################
-
-#     #os.makedirs(f'{tmpdir}/selected_track', exist_ok=True)
-#     #with open(f'{tmpdir}/selected_track/{p.stem}.json','w') as f:
-#     #    f.write(json.dumps(obj_cnt))
-#     ############################################################    
-#     if len(obj_cnt) == 1 and list(obj_cnt.values())[0] > 0:
-#         is_easycase = True
-#         tid = list(obj_cnt.keys())[0]
-#     #------------------------------------------------------------------------------------------
-#     if is_easycase:
-#         os.makedirs(f'{tmpdir}/image_results', exist_ok=1)
-#         cap = cv2.VideoCapture(opt.source)
-#         num_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-#         W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-#         boxes = df[df[1] == tid].values.tolist()
-#         image_boxes = [boxes[np.linspace(0, len(boxes) - 1, 5, dtype=int)[i]] for i in range(5)]
-#         max_l = 0
-#         for i in range(0, num_frame):
-#             _, frame = cap.read()
-#             print(image_boxes)
-#         #---------------在所有识别出来帧中，选取包含最大的anchor的一帧，把anchor变成正方形------------------
-#             while image_boxes and i == int(image_boxes[0][0]):
-#                 x, y, w, h = image_boxes[0][2:6]
-#                 x0, y0 = int(x + w / 2), int(y + h / 2)
-#                 l = int(max(w, h)) + 50
-#                 x1, y1, x2, y2 = x0 - l // 2, y0 - l // 2, x0 + l // 2, y0 + l // 2
-#                 if x1 < 0:
-#                     x1, x2 = 0, x2 - x1
-#                 if y1 < 0:
-#                     y1, y2 = 0, y2 - y1
-#                 if x2 > W:
-#                     x1, x2 = x1 - (x2 - W), W
-#                 if y2 > H:
-#                     y1, y2 = y1 - (y2 - H), H
-#                 if l > max_l:
-#                     max_l = l
-#                     max_image = frame[y1:y2, x1:x2, :].copy()
-#                 image_boxes.pop(0)
-#         cv2.imwrite(f'{tmpdir}/image_results/{p.stem}.jpg', max_image)
-#         print(f'Results saved to {tmpdir}/image_results')
-#         return "Easy"
-#     else:
-#         return "Hard"
-#==================zhan's method ENDS=======================================    
-    
-    
-    
-
+        y = this_tid['center_y']
+        whether_above_door = (y < door).to_list()
+        net_num = 0
+        # LOGGER.info(whether_above_door)
+        for w in range(len(whether_above_door)-1):
+            if whether_above_door[w] and not whether_above_door[w+1]:
+                net_num += 1
+            if not whether_above_door[w] and whether_above_door[w+1]:
+                net_num -= 1
+        
+        os.makedirs(f'{tmpdir}/multiple_image_results/{p.stem}/y_min_track/', exist_ok=1)
+        with open(f'{tmpdir}/multiple_image_results/{p.stem}/y_min_track/tid_{tid}.txt','w') as f:
+            f.write(str(y.to_list()))
+    #=================================防止持续帧数过长====================================
+        if net_num != 0 and len(df['tid']) < 120:
+            selected_tids[tid] = net_num
+    #==================extremely hard=========================
+    if len(selected_tids):
+        with open(f'{tmpdir}/multiple_image_results/extremelyHard.txt','a') as f:
+            f.write(f'{p.stem}'+'\n') 
+    #=========================================================
+    # ---------------------保存净次数-------------------------------------------------
+    os.makedirs(f'{tmpdir}/multiple_image_results/{p.stem}', exist_ok=True)
+    with open(f'{tmpdir}/multiple_image_results/{p.stem}/selected_tids.json','w') as f:
+        f.write(json.dumps(selected_tids))    
+    #>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    for tid in selected_tids.keys():
+        os.makedirs(f'{tmpdir}/multiple_image_results/{p.stem}/', exist_ok=1) 
+        cap = cv2.VideoCapture(opt.source)
+        num_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        boxes = df[df['tid'] == tid].values.tolist()
+        image_boxes = [boxes[np.linspace(0, len(boxes) - 1, 5, dtype=int)[i]] for i in range(5)]
+        
+     #===========================改成最大面积==========================
+        max_area = 0
+        for i in range(0, num_frame):
+            _, frame = cap.read()
+            while image_boxes and i == int(image_boxes[0][0]):
+                x, y, w, h = image_boxes[0][2:6]
+                x0, y0 = int(x + w / 2), int(y + h / 2)
+                l = int(max(w, h)) + 50
+                area = w * h
+                x1, y1, x2, y2 = x0 - l // 2, y0 - l // 2, x0 + l // 2, y0 + l // 2
+                if x1 < 0:
+                    x1, x2 = 0, x2 - x1
+                if y1 < 0:
+                    y1, y2 = 0, y2 - y1
+                if x2 > W:
+                    x1, x2 = x1 - (x2 - W), W
+                if y2 > H:
+                    y1, y2 = y1 - (y2 - H), H
+                if area > max_area:
+                    max_area = area
+                    max_image = frame[y1:y2, x1:x2, :].copy()
+                image_boxes.pop(0)
+        cv2.imwrite(f'{tmpdir}/multiple_image_results/{p.stem}/tid_{tid}.jpg', max_image)
+        LOGGER.info(f'Results tid_{tid} of {p.stem} saved to {tmpdir}/multiple_image_results/{p.stem}')
+    return "Finish"
+      
 if __name__ == "__main__":
 
 # def main(video_path,tmp_path,**kwargs):
@@ -734,5 +727,3 @@ if __name__ == "__main__":
     check_requirements(exclude=('tensorboard', 'thop'))
     
     run(opt)
-
-    

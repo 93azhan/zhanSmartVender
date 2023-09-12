@@ -76,7 +76,8 @@ class detector(object):
         t0 = time.time()
         filename = self.pat.findall(video_path)[0]
         # 命令行执行 yolo+botsort detect
-        c = f'{self.python_path} {self.yolo5_path}/mydetect.py --source {video_path} --tmpdir {self.tmp_path} --save_result --save --save-txt --del_file --zhan'
+        # 间隔超过24帧（2s）重新计数
+        c = f'{self.python_path} {self.yolo5_path}/mydetect.py --source {video_path} --tmpdir {self.tmp_path} --save_result --save --save-txt --zhan --del_file --track_buffer 24'
 
         res = os.popen(c)
         resrd = res.read()
